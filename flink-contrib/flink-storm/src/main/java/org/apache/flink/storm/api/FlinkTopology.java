@@ -63,9 +63,13 @@ import java.util.Set;
  */
 public class FlinkTopology {
 
-	/** All declared streams and output schemas by operator ID. */
+	/**
+	 * All declared streams and output schemas by operator ID.
+	 */
 	private final HashMap<String, HashMap<String, Fields>> outputStreams = new HashMap<String, HashMap<String, Fields>>();
-	/** All spouts&bolts declarers by their ID. */
+	/**
+	 * All spouts&bolts declarers by their ID.
+	 */
 	private final HashMap<String, FlinkOutputFieldsDeclarer> declarers = new HashMap<String, FlinkOutputFieldsDeclarer>();
 
 	private final HashMap<String, Set<Entry<GlobalStreamId, Grouping>>> unprocessdInputsPerBolt =
@@ -83,7 +87,7 @@ public class FlinkTopology {
 
 	private final StreamExecutionEnvironment env;
 
-	private FlinkTopology(TopologyBuilder builder) {
+	private FlinkTopology(TopologyBuilder builder, Map config) {
 		this.builder = builder;
 		this.stormTopology = builder.createTopology();
 		// extract the spouts and bolts
@@ -93,20 +97,30 @@ public class FlinkTopology {
 		this.env = StreamExecutionEnvironment.getExecutionEnvironment();
 
 		// Kick off the translation immediately
-		translateTopology();
+		translateTopology((Integer) config.get("parallelism"));
 	}
+
 
 	/**
 	 * Creates a Flink program that uses the specified spouts and bolts.
+	 *
 	 * @param stormBuilder The Storm topology builder to use for creating the Flink topology.
 	 * @return A {@link FlinkTopology} which contains the translated Storm topology and may be executed.
 	 */
+	public static FlinkTopology createTopology(TopologyBuilder stormBuilder, Map config) {
+		return new FlinkTopology(stormBuilder, config);
+	}
+
 	public static FlinkTopology createTopology(TopologyBuilder stormBuilder) {
-		return new FlinkTopology(stormBuilder);
+		Map config = new HashMap();
+		// default settings.
+		config.put("parallelism", 1);
+		return new FlinkTopology(stormBuilder, config);
 	}
 
 	/**
 	 * Returns the underlying Flink {@link StreamExecutionEnvironment} for the Storm topology.
+	 *
 	 * @return The contextual environment (local or remote).
 	 */
 	public StreamExecutionEnvironment getExecutionEnvironment() {
@@ -116,6 +130,7 @@ public class FlinkTopology {
 	/**
 	 * Directly executes the Storm topology based on the current context (local when in IDE and
 	 * remote when executed through ./bin/flink).
+	 *
 	 * @return The Flink {@link JobExecutionResult} after the execution of the Storm topology.
 	 * @throws Exception which occurs during execution of the translated Storm topology.
 	 */
@@ -139,7 +154,7 @@ public class FlinkTopology {
 			return InstantiationUtil.deserializeObject(
 					InstantiationUtil.serializeObject(object),
 					getClass().getClassLoader()
-					);
+			);
 		} catch (IOException | ClassNotFoundException e) {
 			throw new RuntimeException("Failed to copy object.", e);
 		}
@@ -148,7 +163,7 @@ public class FlinkTopology {
 	/**
 	 * Creates a Flink program that uses the specified spouts and bolts.
 	 */
-	private void translateTopology() {
+	private void translateTopology(int parallelism) {
 
 		unprocessdInputsPerBolt.clear();
 		outputStreams.clear();
@@ -156,7 +171,7 @@ public class FlinkTopology {
 		availableInputs.clear();
 
 		// Storm defaults to parallelism 1
-		env.setParallelism(1);
+		env.setParallelism(parallelism);
 
 		/* Translation of topology */
 
@@ -189,7 +204,7 @@ public class FlinkTopology {
 						userSpout, spoutId, null, null);
 				spoutWrapperMultipleOutputs.setStormTopology(stormTopology);
 
-				@SuppressWarnings({ "unchecked", "rawtypes" })
+				@SuppressWarnings({"unchecked", "rawtypes"})
 				DataStreamSource<SplitStreamType<Tuple>> multiSource = env.addSource(
 						spoutWrapperMultipleOutputs, spoutId,
 						(TypeInformation) TypeExtractor.getForClass(SplitStreamType.class));
@@ -310,9 +325,7 @@ public class FlinkTopology {
 		}
 	}
 
-	private DataStream<Tuple> processInput(String boltId, IRichBolt userBolt,
-			GlobalStreamId streamId, Grouping grouping,
-			Map<String, DataStream<Tuple>> producer) {
+	private DataStream<Tuple> processInput(String boltId, IRichBolt userBolt, GlobalStreamId streamId, Grouping grouping, Map<String, DataStream<Tuple>> producer) {
 
 		assert (userBolt != null);
 		assert (boltId != null);
@@ -355,9 +368,8 @@ public class FlinkTopology {
 		return inputStream;
 	}
 
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private SingleOutputStreamOperator<?> createOutput(String boltId, IRichBolt bolt,
-			Map<GlobalStreamId, DataStream<Tuple>> inputStreams) {
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	private SingleOutputStreamOperator<?> createOutput(String boltId, IRichBolt bolt, Map<GlobalStreamId, DataStream<Tuple>> inputStreams) {
 		assert (boltId != null);
 		assert (bolt != null);
 		assert (inputStreams != null);
@@ -384,16 +396,16 @@ public class FlinkTopology {
 						.flatMap(
 								new TwoFlinkStreamsMerger(streamId1, inputSchema1,
 										streamId2, this.outputStreams.get(
-												streamId2.get_componentId()).get(
-														streamId2.get_streamId())))
-														.returns(StormTuple.class);
+										streamId2.get_componentId()).get(
+										streamId2.get_streamId())))
+						.returns(StormTuple.class);
 			} else {
 				mergedInputStream = mergedInputStream
 						.connect(inputStream2)
 						.flatMap(
 								new StormFlinkStreamMerger(streamId2, this.outputStreams.get(
 										streamId2.get_componentId()).get(streamId2.get_streamId())))
-										.returns(StormTuple.class);
+						.returns(StormTuple.class);
 			}
 		}
 
